@@ -41,9 +41,10 @@ package body Blind_Deconvolution is
       return Result;
    end Reverse_Array;
 
-   -- Performs 1D Convolution, returning "same" length as X
-   function Convolve (X, H : Signal_Array) return Signal_Array is
-      Result : Signal_Array(X'Range) := (others => 0.0);
+   -- Internal targeted convolution: restricts output length to avoid Constraint_Errors
+   -- during gradient updates where Kernel and Signal sizes differ.
+   function Convolve_Target (X, H : Signal_Array; Target_First, Target_Last : Integer) return Signal_Array is
+      Result : Signal_Array(Target_First .. Target_Last) := (others => 0.0);
       H_Len  : constant Integer := H'Length;
       Half_H : constant Integer := H_Len / 2;
    begin
@@ -51,7 +52,7 @@ package body Blind_Deconvolution is
          raise Invalid_Input;
       end if;
 
-      for I in X'Range loop
+      for I in Result'Range loop
          declare
             Sum : Real := 0.0;
          begin
@@ -70,6 +71,12 @@ package body Blind_Deconvolution is
          end;
       end loop;
       return Result;
+   end Convolve_Target;
+
+   -- Performs 1D Convolution, returning "same" length as X
+   function Convolve (X, H : Signal_Array) return Signal_Array is
+   begin
+      return Convolve_Target(X, H, X'First, X'Last);
    end Convolve;
 
    -----------------------------------------------------------------------------
@@ -94,7 +101,7 @@ package body Blind_Deconvolution is
 
       for Iter in 1 .. Iterations loop
          -- 1. Forward projection (Convolution of current Signal and PSF)
-         Estimated_Obs := Convolve(Signal, PSF);
+         Estimated_Obs := Convolve_Target(Signal, PSF, Observed'First, Observed'Last);
 
          -- 2. Calculate error ratio (Observed / Estimated)
          for I in Ratio'Range loop
@@ -103,7 +110,7 @@ package body Blind_Deconvolution is
 
          -- 3. Update Signal (keeping PSF constant)
          PSF_Rev := Reverse_Array(PSF);
-         Correction_S := Convolve(Ratio, PSF_Rev);
+         Correction_S := Convolve_Target(Ratio, PSF_Rev, Signal'First, Signal'Last);
          for I in Signal'Range loop
             Signal(I) := Signal(I) * Correction_S(I);
             if Signal(I) < 0.0 then Signal(I) := 0.0; end if; -- Positivity constraint
@@ -111,7 +118,7 @@ package body Blind_Deconvolution is
 
          -- 4. Update PSF (keeping Signal constant)
          Sig_Rev := Reverse_Array(Signal);
-         Correction_P := Convolve(Ratio, Sig_Rev);
+         Correction_P := Convolve_Target(Ratio, Sig_Rev, PSF'First, PSF'Last);
          for I in PSF'Range loop
             PSF(I) := PSF(I) * Correction_P(I);
             if PSF(I) < 0.0 then PSF(I) := 0.0; end if;
@@ -144,14 +151,14 @@ package body Blind_Deconvolution is
 
       for Iter in 1 .. Iterations loop
          -- Compute Residual: Observed - (Signal * PSF)
-         Residual := Convolve(Signal, PSF);
+         Residual := Convolve_Target(Signal, PSF, Observed'First, Observed'Last);
          for I in Residual'Range loop
             Residual(I) := Observed(I) - Residual(I);
          end loop;
 
          -- Gradient w.r.t Signal: -Residual * reversed(PSF)
          PSF_Rev := Reverse_Array(PSF);
-         Grad_S := Convolve(Residual, PSF_Rev);
+         Grad_S := Convolve_Target(Residual, PSF_Rev, Signal'First, Signal'Last);
          for I in Signal'Range loop
             Signal(I) := Signal(I) + Alpha * Grad_S(I);
             if Signal(I) < 0.0 then Signal(I) := 0.0; end if; 
@@ -159,7 +166,7 @@ package body Blind_Deconvolution is
 
          -- Gradient w.r.t PSF: -Residual * reversed(Signal)
          Sig_Rev := Reverse_Array(Signal);
-         Grad_P := Convolve(Residual, Sig_Rev);
+         Grad_P := Convolve_Target(Residual, Sig_Rev, PSF'First, PSF'Last);
          for I in PSF'Range loop
             PSF(I) := PSF(I) + Alpha * Grad_P(I);
             if PSF(I) < 0.0 then PSF(I) := 0.0; end if;
@@ -180,7 +187,7 @@ package body Blind_Deconvolution is
       Noise_Factor : constant Real := 1.0 / (SNR + Epsilon);
       PSF_Rev : Signal_Array := Reverse_Array(PSF);
       -- Simplified time-domain deconvolution via regularized correlation
-      Cross_Corr : Signal_Array := Convolve(Observed, PSF_Rev);
+      Cross_Corr : Signal_Array := Convolve_Target(Observed, PSF_Rev, Observed'First, Observed'Last);
    begin
       if Observed'Length = 0 then raise Invalid_Input; end if;
 
